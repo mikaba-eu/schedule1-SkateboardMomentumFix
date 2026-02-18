@@ -37,6 +37,7 @@ internal static class SkateboardMomentumFixService
 			CurrentPosition = playerCamera.transform.position;
 			CurrentRotation = playerCamera.transform.rotation;
 			MountStartOffset = Vector3.zero;
+			MountStartViewRotation = CurrentRotation;
 			MountBlend = 0f;
 			ManualWeight = 0f;
 			ManualWeightVelocity = 0f;
@@ -56,6 +57,8 @@ internal static class SkateboardMomentumFixService
 		internal Quaternion CurrentRotation;
 
 		internal Vector3 MountStartOffset;
+
+		internal Quaternion MountStartViewRotation;
 
 		internal float MountBlend;
 
@@ -324,6 +327,7 @@ internal static class SkateboardMomentumFixService
 		activeCameraState.OrbitYaw = euler.y;
 		activeCameraState.OrbitPitch = Mathf.Clamp(pitch, CameraPitchMin, CameraPitchMax);
 		activeCameraState.MountStartOffset = EnsureMinimumCameraOffset(activeCameraState.CurrentPosition - originTransform.position, activeCameraState.CurrentRotation);
+		activeCameraState.MountStartViewRotation = activeCameraState.CurrentRotation;
 		HideLocalBodyDuringMountPullout(activeCameraState);
 		return true;
 	}
@@ -365,7 +369,9 @@ internal static class SkateboardMomentumFixService
 		float dt = Mathf.Max(Time.deltaTime, 0.0001f);
 		Vector3 origin = originTransform.position;
 		Vector3 boardForward = ResolveBoardForward(activeCameraState.Board, skateboardCamera);
-		Vector3 autoOffset = ComputeAutoOffset(skateboardCamera, boardForward);
+		Vector3 cameraAnchor = skateboardCamera.transform != null ? skateboardCamera.transform.position : activeCameraState.Board.transform.position;
+		Vector3 autoOffset = cameraAnchor + ComputeAutoOffset(skateboardCamera, boardForward) - origin;
+		autoOffset = EnsureMinimumCameraOffset(autoOffset, activeCameraState.CurrentRotation);
 		float orbitDistance = Mathf.Max(autoOffset.magnitude, CameraMinDistance);
 
 		Vector2 mouseDelta = GameInput.MouseDelta;
@@ -413,19 +419,23 @@ internal static class SkateboardMomentumFixService
 		Vector3 manualOffset = orbitRotation * Vector3.back * orbitDistance;
 		Vector3 targetOffset = Vector3.Lerp(autoOffset, manualOffset, activeCameraState.ManualWeight);
 		targetOffset = EnsureMinimumCameraOffset(targetOffset, orbitRotation);
+		float mountT = 1f;
 		if (activeCameraState.MountBlend < 1f)
 		{
 			activeCameraState.MountBlend = Mathf.MoveTowards(activeCameraState.MountBlend, 1f, dt / CameraMountBlendDuration);
 			float easedBlend = Mathf.Pow(activeCameraState.MountBlend, CameraMountEasePower);
-			float mountT = easedBlend * easedBlend * (3f - 2f * easedBlend);
+			mountT = easedBlend * easedBlend * (3f - 2f * easedBlend);
 			targetOffset = Vector3.Lerp(activeCameraState.MountStartOffset, targetOffset, mountT);
 		}
 		targetOffset = EnsureMinimumCameraOffset(targetOffset, orbitRotation);
 		Vector3 desiredPosition = ResolveCameraCollision(origin, origin + targetOffset);
 		Vector3 desiredDirection = origin - desiredPosition;
-		Quaternion desiredRotation = desiredDirection.sqrMagnitude > 0.0001f
+		Quaternion lookRotation = desiredDirection.sqrMagnitude > 0.0001f
 			? Quaternion.LookRotation(desiredDirection, Vector3.up)
 			: activeCameraState.CurrentRotation;
+		Quaternion desiredRotation = activeCameraState.MountBlend < 1f
+			? Quaternion.Slerp(activeCameraState.MountStartViewRotation, lookRotation, mountT)
+			: lookRotation;
 
 		if (activeCameraState.LocalBodyHidden &&
 		    Time.timeSinceLevelLoad >= activeCameraState.HideBodyUntilTime &&
