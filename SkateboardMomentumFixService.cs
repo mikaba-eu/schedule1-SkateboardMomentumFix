@@ -37,7 +37,6 @@ internal static class SkateboardMomentumFixService
 			CurrentPosition = playerCamera.transform.position;
 			CurrentRotation = playerCamera.transform.rotation;
 			MountStartOffset = Vector3.zero;
-			MountStartRotation = CurrentRotation;
 			MountBlend = 0f;
 			ManualWeight = 0f;
 			ManualWeightVelocity = 0f;
@@ -57,8 +56,6 @@ internal static class SkateboardMomentumFixService
 		internal Quaternion CurrentRotation;
 
 		internal Vector3 MountStartOffset;
-
-		internal Quaternion MountStartRotation;
 
 		internal float MountBlend;
 
@@ -326,7 +323,7 @@ internal static class SkateboardMomentumFixService
 		}
 		activeCameraState.OrbitYaw = euler.y;
 		activeCameraState.OrbitPitch = Mathf.Clamp(pitch, CameraPitchMin, CameraPitchMax);
-		activeCameraState.MountStartOffset = activeCameraState.CurrentPosition - originTransform.position;
+		activeCameraState.MountStartOffset = EnsureMinimumCameraOffset(activeCameraState.CurrentPosition - originTransform.position, activeCameraState.CurrentRotation);
 		HideLocalBodyDuringMountPullout(activeCameraState);
 		return true;
 	}
@@ -367,20 +364,9 @@ internal static class SkateboardMomentumFixService
 
 		float dt = Mathf.Max(Time.deltaTime, 0.0001f);
 		Vector3 origin = originTransform.position;
-		Vector3 boardForward = NormalizeOrZero(Flatten(activeCameraState.Board.transform.forward));
-		if (boardForward.sqrMagnitude <= 0.0001f && skateboardCamera.transform != null)
-		{
-			boardForward = NormalizeOrZero(Flatten(skateboardCamera.transform.forward));
-		}
-		if (boardForward.sqrMagnitude <= 0.0001f)
-		{
-			boardForward = Vector3.forward;
-		}
-
+		Vector3 boardForward = ResolveBoardForward(activeCameraState.Board, skateboardCamera);
 		Vector3 autoOffset = ComputeAutoOffset(skateboardCamera, boardForward);
 		float orbitDistance = Mathf.Max(autoOffset.magnitude, CameraMinDistance);
-		Vector3 cameraAnchor = skateboardCamera.transform != null ? skateboardCamera.transform.position : activeCameraState.Board.transform.position;
-		Vector3 autoPosition = ResolveCameraCollision(origin, cameraAnchor + autoOffset);
 
 		Vector2 mouseDelta = GameInput.MouseDelta;
 		bool requiresSecondary = NeedsSecondaryClick();
@@ -415,7 +401,7 @@ internal static class SkateboardMomentumFixService
 			activeCameraState.ManualWeight = 0f;
 			activeCameraState.ManualWeightVelocity = 0f;
 			activeCameraState.TimeSinceManualInput = 100f;
-			Vector3 autoLook = NormalizeOrZero(origin - autoPosition);
+			Vector3 autoLook = NormalizeOrZero(-autoOffset);
 			if (autoLook.sqrMagnitude > 0.0001f)
 			{
 				activeCameraState.OrbitYaw = DirectionToYaw(autoLook);
@@ -424,35 +410,22 @@ internal static class SkateboardMomentumFixService
 		}
 
 		Quaternion orbitRotation = Quaternion.Euler(activeCameraState.OrbitPitch, activeCameraState.OrbitYaw, 0f);
-		Vector3 manualPosition = origin + orbitRotation * Vector3.back * orbitDistance;
-		manualPosition = ResolveCameraCollision(origin, manualPosition);
-		Vector3 followPosition = Vector3.Lerp(autoPosition, manualPosition, activeCameraState.ManualWeight);
-		followPosition = ResolveCameraCollision(origin, followPosition);
-		Vector3 followDirection = origin - followPosition;
-		Quaternion followRotation = followDirection.sqrMagnitude > 0.0001f
-			? Quaternion.LookRotation(followDirection, Vector3.up)
-			: activeCameraState.CurrentRotation;
-
-		Vector3 desiredPosition;
-		Quaternion desiredRotation;
+		Vector3 manualOffset = orbitRotation * Vector3.back * orbitDistance;
+		Vector3 targetOffset = Vector3.Lerp(autoOffset, manualOffset, activeCameraState.ManualWeight);
+		targetOffset = EnsureMinimumCameraOffset(targetOffset, orbitRotation);
 		if (activeCameraState.MountBlend < 1f)
 		{
 			activeCameraState.MountBlend = Mathf.MoveTowards(activeCameraState.MountBlend, 1f, dt / CameraMountBlendDuration);
 			float easedBlend = Mathf.Pow(activeCameraState.MountBlend, CameraMountEasePower);
 			float mountT = easedBlend * easedBlend * (3f - 2f * easedBlend);
-			Vector3 mountStartPosition = origin + activeCameraState.MountStartOffset;
-			Vector3 mountStartDirection = origin - mountStartPosition;
-			Quaternion mountStartRotation = mountStartDirection.sqrMagnitude > 0.0001f
-				? Quaternion.LookRotation(mountStartDirection, Vector3.up)
-				: activeCameraState.MountStartRotation;
-			desiredPosition = Vector3.Lerp(mountStartPosition, followPosition, mountT);
-			desiredRotation = Quaternion.Slerp(mountStartRotation, followRotation, mountT);
+			targetOffset = Vector3.Lerp(activeCameraState.MountStartOffset, targetOffset, mountT);
 		}
-		else
-		{
-			desiredPosition = followPosition;
-			desiredRotation = followRotation;
-		}
+		targetOffset = EnsureMinimumCameraOffset(targetOffset, orbitRotation);
+		Vector3 desiredPosition = ResolveCameraCollision(origin, origin + targetOffset);
+		Vector3 desiredDirection = origin - desiredPosition;
+		Quaternion desiredRotation = desiredDirection.sqrMagnitude > 0.0001f
+			? Quaternion.LookRotation(desiredDirection, Vector3.up)
+			: activeCameraState.CurrentRotation;
 
 		if (activeCameraState.LocalBodyHidden &&
 		    Time.timeSinceLevelLoad >= activeCameraState.HideBodyUntilTime &&
@@ -755,6 +728,25 @@ internal static class SkateboardMomentumFixService
 		return limited;
 	}
 
+	private static Vector3 ResolveBoardForward(Skateboard board, SkateboardCamera skateboardCamera)
+	{
+		Vector3 boardForward = Vector3.zero;
+		if (board != null)
+		{
+			boardForward = NormalizeOrZero(Flatten(board.transform.forward));
+		}
+		if (boardForward.sqrMagnitude <= 0.0001f && skateboardCamera != null && skateboardCamera.transform != null)
+		{
+			boardForward = NormalizeOrZero(Flatten(skateboardCamera.transform.forward));
+		}
+		if (boardForward.sqrMagnitude <= 0.0001f)
+		{
+			boardForward = Vector3.forward;
+		}
+
+		return boardForward;
+	}
+
 	private static Vector3 ComputeAutoOffset(SkateboardCamera skateboardCamera, Vector3 boardForward)
 	{
 		boardForward = NormalizeOrZero(boardForward);
@@ -769,6 +761,26 @@ internal static class SkateboardMomentumFixService
 		}
 
 		return offset;
+	}
+
+	private static Vector3 EnsureMinimumCameraOffset(Vector3 offset, Quaternion fallbackRotation)
+	{
+		if (offset.sqrMagnitude >= CameraMinDistance * CameraMinDistance)
+		{
+			return offset;
+		}
+
+		Vector3 fallbackDir = NormalizeOrZero(offset);
+		if (fallbackDir.sqrMagnitude <= 0.0001f)
+		{
+			fallbackDir = NormalizeOrZero(fallbackRotation * Vector3.back);
+		}
+		if (fallbackDir.sqrMagnitude <= 0.0001f)
+		{
+			fallbackDir = Vector3.back;
+		}
+
+		return fallbackDir * CameraMinDistance;
 	}
 
 	private static bool NeedsSecondaryClick()
