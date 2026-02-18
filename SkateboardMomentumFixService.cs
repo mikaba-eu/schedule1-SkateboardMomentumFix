@@ -104,7 +104,7 @@ internal static class SkateboardMomentumFixService
 	private const float TransitionWindow = 0.45f;
 	private const float CameraMountBlendDuration = 1.55f;
 	private const float CameraMountEasePower = 1.4f;
-	private const float CameraMountHideBodyDuration = 0.1f;
+	private const float CameraMountHideBodyDuration = 0.25f;
 	private const float CameraPositionSharpness = 11.5f;
 	private const float CameraRotationSharpness = 14.5f;
 	private const float CameraManualReleaseDelay = 0.05f;
