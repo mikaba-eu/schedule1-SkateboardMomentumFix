@@ -28,17 +28,73 @@ internal static class SkateboardMomentumFixService
 		internal bool HadSprintCarry { get; }
 	}
 
-	private readonly struct CameraPose
+	private sealed class CustomCameraState
 	{
-		internal CameraPose(Vector3 position, Quaternion rotation)
+		internal CustomCameraState(SkateboardCamera cameraComponent, Skateboard board, PlayerCamera playerCamera)
 		{
-			Position = position;
-			Rotation = rotation;
+			CameraComponent = cameraComponent;
+			Board = board;
+			CurrentPosition = playerCamera.transform.position;
+			CurrentRotation = playerCamera.transform.rotation;
+			MountStartPosition = CurrentPosition;
+			MountStartRotation = CurrentRotation;
+			MountBlend = 0f;
+			ManualWeight = NeedsSecondaryClick() ? 0f : 1f;
+			ManualWeightVelocity = 0f;
+			TimeSinceManualInput = 100f;
+			Distance = 2.5f;
+			DistanceCurrent = 2.5f;
+			DistanceVelocity = 0f;
+			BaseFov = (playerCamera.Camera != null) ? playerCamera.Camera.fieldOfView : 80f;
+			CurrentFovMultiplier = 1f;
+			SmoothedForward = Vector3.forward;
+			LocalBodyHidden = false;
+			HideBodyUntilTime = 0f;
 		}
 
-		internal Vector3 Position { get; }
+		internal SkateboardCamera CameraComponent { get; }
 
-		internal Quaternion Rotation { get; }
+		internal Skateboard Board { get; }
+
+		internal Vector3 CurrentPosition;
+
+		internal Quaternion CurrentRotation;
+
+		internal Vector3 MountStartPosition;
+
+		internal Quaternion MountStartRotation;
+
+		internal float MountBlend;
+
+		internal float Distance;
+
+		internal float DistanceCurrent;
+
+		internal float DistanceVelocity;
+
+		internal float OrbitYaw;
+
+		internal float OrbitPitch;
+
+		internal float OrbitYawVelocity;
+
+		internal float OrbitPitchVelocity;
+
+		internal float ManualWeight;
+
+		internal float ManualWeightVelocity;
+
+		internal float TimeSinceManualInput;
+
+		internal float BaseFov;
+
+		internal float CurrentFovMultiplier;
+
+		internal Vector3 SmoothedForward;
+
+		internal bool LocalBodyHidden;
+
+		internal float HideBodyUntilTime;
 	}
 
 	private readonly struct DismountContext
@@ -62,35 +118,55 @@ internal static class SkateboardMomentumFixService
 	private const float MountTransferMultiplier = 1.15f;
 	private const float MaxMountDirectionAngle = 55f;
 	private const float TransitionWindow = 0.45f;
-	private const float MountCameraBlendTime = 0.11f;
-	private const float MinDismountCameraLerp = 0.12f;
-	private const float MinDismountFovLerp = 0.1f;
-	private const float MinDismountResidualSpeed = 0.75f;
-	private const float DismountResidualForcePerSpeed = 14f;
-	private const float DismountResidualMinForce = 20f;
-	private const float DismountResidualMaxForce = 130f;
-	private const float DismountResidualDurationBase = 0.08f;
-	private const float DismountResidualDurationPerSpeed = 0.01f;
-	private const float DismountResidualDurationMin = 0.1f;
-	private const float DismountResidualDurationMax = 0.18f;
+	private const float CameraMountBlendDuration = 0.28f;
+	private const float CameraMountHideBodyDuration = 0.22f;
+	private const float CameraPositionSharpness = 14f;
+	private const float CameraRotationSharpness = 18f;
+	private const float CameraDistanceSmoothTime = 0.34f;
+	private const float CameraAutoYawSmoothTime = 0.2f;
+	private const float CameraAutoPitchSmoothTime = 0.24f;
+	private const float CameraForwardSharpness = 11f;
+	private const float CameraManualReleaseDelay = 0.05f;
+	private const float CameraManualEngageSmoothTime = 0.08f;
+	private const float CameraManualReturnSmoothTime = 0.48f;
+	private const float CameraPitchMin = -22f;
+	private const float CameraPitchMax = 86f;
+	private const float CameraMouseYawScale = 1.2f;
+	private const float CameraMousePitchScale = 0.8f;
+	private const float CameraCollisionPadding = 0.36f;
+	private const float CameraCollisionRadius = 0.2f;
+	private const float CameraMinDistance = 0.6f;
+	private const float CameraFovSharpness = 10f;
+	private const float MinDismountCameraLerp = 0.3f;
+	private const float MinDismountFovLerp = 0.24f;
+	private const float MinDismountResidualSpeed = 0.65f;
+	private const float DismountResidualForcePerSpeed = 16f;
+	private const float DismountResidualMinForce = 24f;
+	private const float DismountResidualMaxForce = 155f;
+	private const float DismountResidualDurationBase = 0.09f;
+	private const float DismountResidualDurationPerSpeed = 0.012f;
+	private const float DismountResidualDurationMin = 0.11f;
+	private const float DismountResidualDurationMax = 0.22f;
 
 	private static readonly Dictionary<int, MountSample> mountSamples = new();
-	private static readonly Dictionary<int, CameraPose> mountCameraStartPoses = new();
 	private static float sprintCarryUntil = -100f;
 	private static TransitionPhase transitionPhase = TransitionPhase.None;
 	private static float transitionUntil = -100f;
 	private static bool hasDismountContext;
 	private static DismountContext dismountContext;
+	private static CustomCameraState? activeCameraState;
+	private static int cameraCollisionMask = -1;
 
 	internal static void Initialize()
 	{
 		mountSamples.Clear();
-		mountCameraStartPoses.Clear();
 		sprintCarryUntil = -100f;
 		transitionPhase = TransitionPhase.None;
 		transitionUntil = -100f;
 		hasDismountContext = false;
 		dismountContext = default;
+		ClearCustomCameraState(restoreVisibilityForMountState: true);
+		cameraCollisionMask = -1;
 	}
 
 	internal static void NotifySceneInitialized(string sceneName)
@@ -241,59 +317,213 @@ internal static class SkateboardMomentumFixService
 		board.SetVelocity(direction * finalSpeed);
 	}
 
-	internal static void CaptureMountCameraPose(SkateboardCamera skateboardCamera)
+	internal static bool BeginCustomSkateboardCamera(SkateboardCamera skateboardCamera, Skateboard skateboard)
 	{
-		if (skateboardCamera == null)
+		if (skateboardCamera == null || skateboard == null)
 		{
-			return;
+			return false;
 		}
 
 		PlayerCamera playerCamera = GetPlayerCamera();
-		if (playerCamera == null)
+		if (playerCamera == null || playerCamera.transform == null)
 		{
-			return;
+			return false;
 		}
 
-		mountCameraStartPoses[skateboardCamera.GetInstanceID()] = new CameraPose(playerCamera.transform.position, playerCamera.transform.rotation);
+		Transform originTransform = skateboardCamera.cameraOrigin;
+		if (originTransform == null)
+		{
+			return false;
+		}
+
+		activeCameraState = new CustomCameraState(skateboardCamera, skateboard, playerCamera);
+		Vector3 boardForward = NormalizeOrZero(Flatten(skateboard.transform.forward));
+		if (boardForward.sqrMagnitude <= 0.0001f)
+		{
+			boardForward = Vector3.forward;
+		}
+		activeCameraState.SmoothedForward = boardForward;
+
+		Vector3 autoOffset = ComputeAutoOffset(skateboardCamera, activeCameraState.SmoothedForward);
+		activeCameraState.Distance = Mathf.Max(autoOffset.magnitude, CameraMinDistance);
+		activeCameraState.DistanceCurrent = Mathf.Clamp(Vector3.Distance(playerCamera.transform.position, originTransform.position), 0.15f, activeCameraState.Distance);
+		if (activeCameraState.DistanceCurrent <= 0.001f)
+		{
+			activeCameraState.DistanceCurrent = Mathf.Min(0.65f, activeCameraState.Distance);
+		}
+		Vector3 euler = playerCamera.transform.rotation.eulerAngles;
+		float pitch = euler.x;
+		if (pitch > 180f)
+		{
+			pitch -= 360f;
+		}
+		activeCameraState.OrbitYaw = euler.y;
+		activeCameraState.OrbitPitch = Mathf.Clamp(pitch, CameraPitchMin, CameraPitchMax);
+		activeCameraState.OrbitYawVelocity = 0f;
+		activeCameraState.OrbitPitchVelocity = 0f;
+		HideLocalBodyDuringMountPullout(activeCameraState);
+		return true;
 	}
 
-	internal static void BlendMountCamera(SkateboardCamera skateboardCamera)
+	internal static bool HasCustomSkateboardCamera(SkateboardCamera skateboardCamera)
 	{
-		if (skateboardCamera == null)
+		if (activeCameraState == null || skateboardCamera == null)
 		{
-			return;
+			return false;
 		}
 
-		int key = skateboardCamera.GetInstanceID();
-		if (!mountCameraStartPoses.TryGetValue(key, out CameraPose startPose))
+		return activeCameraState.CameraComponent == skateboardCamera;
+	}
+
+	internal static bool RunCustomSkateboardCamera(SkateboardCamera skateboardCamera)
+	{
+		if (!HasCustomSkateboardCamera(skateboardCamera) || activeCameraState == null)
 		{
-			return;
+			return false;
 		}
-		mountCameraStartPoses.Remove(key);
 
 		PlayerCamera playerCamera = GetPlayerCamera();
-		if (playerCamera == null || transitionPhase != TransitionPhase.Mount)
+		Transform originTransform = skateboardCamera.cameraOrigin;
+		if (playerCamera == null || playerCamera.transform == null || originTransform == null)
+		{
+			ClearCustomCameraState(restoreVisibilityForMountState: true);
+			return false;
+		}
+		if (activeCameraState.Board == null || !activeCameraState.Board.isActiveAndEnabled)
+		{
+			ClearCustomCameraState(restoreVisibilityForMountState: true);
+			return false;
+		}
+
+		float dt = Mathf.Max(Time.deltaTime, 0.0001f);
+		Vector3 origin = originTransform.position;
+		Vector3 boardForward = NormalizeOrZero(Flatten(activeCameraState.Board.transform.forward));
+		if (boardForward.sqrMagnitude <= 0.0001f)
+		{
+			boardForward = activeCameraState.SmoothedForward;
+		}
+		if (boardForward.sqrMagnitude <= 0.0001f)
+		{
+			boardForward = Vector3.forward;
+		}
+		float forwardT = 1f - Mathf.Exp(0f - CameraForwardSharpness * dt);
+		activeCameraState.SmoothedForward = NormalizeOrZero(Vector3.Slerp(activeCameraState.SmoothedForward, boardForward, forwardT));
+		if (activeCameraState.SmoothedForward.sqrMagnitude <= 0.0001f)
+		{
+			activeCameraState.SmoothedForward = boardForward;
+		}
+		Vector3 autoOffset = ComputeAutoOffset(skateboardCamera, activeCameraState.SmoothedForward);
+		Vector3 autoDirection = NormalizeOrZero(autoOffset);
+		if (autoDirection.sqrMagnitude <= 0.0001f)
+		{
+			autoDirection = Vector3.back;
+		}
+		float autoYaw = DirectionToYaw(autoDirection);
+		float autoPitch = Mathf.Clamp(DirectionToPitch(autoDirection), CameraPitchMin, CameraPitchMax);
+
+		Vector2 mouseDelta = GameInput.MouseDelta;
+		bool requiresSecondary = NeedsSecondaryClick();
+		bool secondaryHeld = GameInput.GetButton(GameInput.ButtonCode.SecondaryClick);
+		bool hasMouseInput = mouseDelta.sqrMagnitude > 0.000001f;
+		bool manualControlActive = requiresSecondary ? secondaryHeld : hasMouseInput;
+		bool manualLookInput = manualControlActive && hasMouseInput;
+		float lookSensitivity = GetLookSensitivity();
+
+		if (manualControlActive)
+		{
+			if (manualLookInput)
+			{
+				activeCameraState.OrbitYaw += mouseDelta.x * CameraMouseYawScale * lookSensitivity;
+				activeCameraState.OrbitPitch = Mathf.Clamp(activeCameraState.OrbitPitch - mouseDelta.y * CameraMousePitchScale * lookSensitivity, CameraPitchMin, CameraPitchMax);
+			}
+			activeCameraState.TimeSinceManualInput = 0f;
+			activeCameraState.ManualWeight = Mathf.SmoothDamp(activeCameraState.ManualWeight, 1f, ref activeCameraState.ManualWeightVelocity, CameraManualEngageSmoothTime, Mathf.Infinity, dt);
+		}
+		else
+		{
+			activeCameraState.TimeSinceManualInput += dt;
+			if (activeCameraState.TimeSinceManualInput > CameraManualReleaseDelay)
+			{
+				activeCameraState.ManualWeight = Mathf.SmoothDamp(activeCameraState.ManualWeight, 0f, ref activeCameraState.ManualWeightVelocity, CameraManualReturnSmoothTime, Mathf.Infinity, dt);
+			}
+			activeCameraState.OrbitYaw = Mathf.SmoothDampAngle(activeCameraState.OrbitYaw, autoYaw, ref activeCameraState.OrbitYawVelocity, CameraAutoYawSmoothTime, Mathf.Infinity, dt);
+			activeCameraState.OrbitPitch = Mathf.SmoothDamp(activeCameraState.OrbitPitch, autoPitch, ref activeCameraState.OrbitPitchVelocity, CameraAutoPitchSmoothTime, Mathf.Infinity, dt);
+		}
+
+		if (GameInput.GetButtonDown(GameInput.ButtonCode.VehicleResetCamera))
+		{
+			activeCameraState.ManualWeight = 0f;
+			activeCameraState.ManualWeightVelocity = 0f;
+			activeCameraState.TimeSinceManualInput = 100f;
+			activeCameraState.OrbitYaw = autoYaw;
+			activeCameraState.OrbitPitch = autoPitch;
+			activeCameraState.OrbitYawVelocity = 0f;
+			activeCameraState.OrbitPitchVelocity = 0f;
+		}
+
+		activeCameraState.DistanceCurrent = Mathf.SmoothDamp(activeCameraState.DistanceCurrent, activeCameraState.Distance, ref activeCameraState.DistanceVelocity, CameraDistanceSmoothTime, Mathf.Infinity, dt);
+		float distanceScale = (activeCameraState.Distance > 0.001f) ? activeCameraState.DistanceCurrent / activeCameraState.Distance : 1f;
+		Vector3 cameraAnchor = skateboardCamera.transform != null ? skateboardCamera.transform.position : activeCameraState.Board.transform.position;
+		Vector3 autoPosition = cameraAnchor + autoOffset * distanceScale;
+		Quaternion orbitRotation = Quaternion.Euler(activeCameraState.OrbitPitch, activeCameraState.OrbitYaw, 0f);
+		Vector3 manualPosition = origin + orbitRotation * Vector3.back * activeCameraState.DistanceCurrent;
+		Vector3 desiredPosition = Vector3.Lerp(autoPosition, manualPosition, activeCameraState.ManualWeight);
+		desiredPosition = ResolveCameraCollision(origin, desiredPosition);
+		Quaternion desiredRotation = Quaternion.LookRotation(origin - desiredPosition, Vector3.up);
+
+		if (activeCameraState.MountBlend < 1f)
+		{
+			activeCameraState.MountBlend = Mathf.MoveTowards(activeCameraState.MountBlend, 1f, dt / CameraMountBlendDuration);
+			float mountT = activeCameraState.MountBlend * activeCameraState.MountBlend * (3f - 2f * activeCameraState.MountBlend);
+			desiredPosition = Vector3.Lerp(activeCameraState.MountStartPosition, desiredPosition, mountT);
+			desiredRotation = Quaternion.Slerp(activeCameraState.MountStartRotation, desiredRotation, mountT);
+		}
+
+		if (activeCameraState.LocalBodyHidden &&
+		    (Time.timeSinceLevelLoad >= activeCameraState.HideBodyUntilTime || activeCameraState.MountBlend >= 0.55f || activeCameraState.DistanceCurrent >= activeCameraState.Distance * 0.5f))
+		{
+			SetLocalBodyVisibility(visible: true);
+			activeCameraState.LocalBodyHidden = false;
+		}
+
+		float posT = 1f - Mathf.Exp(0f - CameraPositionSharpness * dt);
+		float rotT = 1f - Mathf.Exp(0f - CameraRotationSharpness * dt);
+		activeCameraState.CurrentPosition = Vector3.Lerp(activeCameraState.CurrentPosition, desiredPosition, posT);
+		activeCameraState.CurrentRotation = Quaternion.Slerp(activeCameraState.CurrentRotation, desiredRotation, rotT);
+		playerCamera.transform.position = activeCameraState.CurrentPosition;
+		playerCamera.transform.rotation = activeCameraState.CurrentRotation;
+
+		float speed01 = 0f;
+		if (activeCameraState.Board.Rb != null)
+		{
+			speed01 = Mathf.Clamp01(activeCameraState.Board.Rb.velocity.magnitude / Mathf.Max(activeCameraState.Board.TopSpeed_Ms, 0.1f));
+		}
+		float targetFovMultiplier = Mathf.Lerp(skateboardCamera.FOVMultiplier_MinSpeed, skateboardCamera.FOVMultiplier_MaxSpeed, speed01);
+		float fovT = 1f - Mathf.Exp(0f - Mathf.Max(CameraFovSharpness, skateboardCamera.FOVMultiplierChangeRate * 4f) * dt);
+		activeCameraState.CurrentFovMultiplier = Mathf.Lerp(activeCameraState.CurrentFovMultiplier, targetFovMultiplier, fovT);
+		if (playerCamera.Camera != null)
+		{
+			playerCamera.Camera.fieldOfView = activeCameraState.BaseFov * activeCameraState.CurrentFovMultiplier;
+		}
+
+		return true;
+	}
+
+	internal static void NotifySkateboardCameraDestroyed(SkateboardCamera skateboardCamera)
+	{
+		if (!HasCustomSkateboardCamera(skateboardCamera))
 		{
 			return;
 		}
 
-		Vector3 targetPosition = playerCamera.transform.position;
-		Quaternion targetRotation = playerCamera.transform.rotation;
-		if ((targetPosition - startPose.Position).sqrMagnitude <= 0.0001f &&
-		    Quaternion.Angle(targetRotation, startPose.Rotation) <= 0.05f)
-		{
-			return;
-		}
-
-		playerCamera.transform.position = startPose.Position;
-		playerCamera.transform.rotation = startPose.Rotation;
-		playerCamera.OverrideTransform(targetPosition, targetRotation, MountCameraBlendTime);
+		ClearCustomCameraState(restoreVisibilityForMountState: true);
 	}
 
 	internal static void BeginDismount(Skateboard_Equippable equippable)
 	{
 		transitionPhase = TransitionPhase.Dismount;
 		transitionUntil = Time.timeSinceLevelLoad + TransitionWindow;
+		ClearCustomCameraState(restoreVisibilityForMountState: false);
 
 		hasDismountContext = false;
 		if (equippable == null)
@@ -316,6 +546,40 @@ internal static class SkateboardMomentumFixService
 		Vector3 playerForward = Flatten(local.transform.forward);
 		dismountContext = new DismountContext(boardVelocity, playerForward);
 		hasDismountContext = true;
+	}
+
+	private static void HideLocalBodyDuringMountPullout(CustomCameraState state)
+	{
+		if (state == null)
+		{
+			return;
+		}
+
+		SetLocalBodyVisibility(visible: false);
+		state.LocalBodyHidden = true;
+		state.HideBodyUntilTime = Time.timeSinceLevelLoad + CameraMountHideBodyDuration;
+	}
+
+	private static void ClearCustomCameraState(bool restoreVisibilityForMountState)
+	{
+		if (activeCameraState != null && activeCameraState.LocalBodyHidden && restoreVisibilityForMountState)
+		{
+			SetLocalBodyVisibility(visible: true);
+			activeCameraState.LocalBodyHidden = false;
+		}
+
+		activeCameraState = null;
+	}
+
+	private static void SetLocalBodyVisibility(bool visible)
+	{
+		Player local = Player.Local;
+		if (local == null)
+		{
+			return;
+		}
+
+		local.SetVisibleToLocalPlayer(visible);
 	}
 
 	internal static void EndDismount()
@@ -495,6 +759,113 @@ internal static class SkateboardMomentumFixService
 		}
 
 		return limited;
+	}
+
+	private static Vector3 ComputeAutoOffset(SkateboardCamera skateboardCamera, Vector3 boardForward)
+	{
+		boardForward = NormalizeOrZero(boardForward);
+		if (boardForward.sqrMagnitude <= 0.0001f)
+		{
+			boardForward = Vector3.forward;
+		}
+		Vector3 offset = boardForward * skateboardCamera.HorizontalOffset + Vector3.up * skateboardCamera.VerticalOffset;
+		if (offset.sqrMagnitude <= 0.04f)
+		{
+			offset = boardForward * -2.4f + Vector3.up * 1.8f;
+		}
+
+		return offset;
+	}
+
+	private static bool NeedsSecondaryClick()
+	{
+		return GameInput.CurrentInputDevice == GameInput.InputDeviceType.KeyboardMouse;
+	}
+
+	private static float GetLookSensitivity()
+	{
+#if IL2CPP
+		Il2CppScheduleOne.DevUtilities.Settings settings = Il2CppScheduleOne.DevUtilities.Singleton<Il2CppScheduleOne.DevUtilities.Settings>.Instance;
+#else
+		ScheduleOne.DevUtilities.Settings settings = ScheduleOne.DevUtilities.Singleton<ScheduleOne.DevUtilities.Settings>.Instance;
+#endif
+		if (settings == null)
+		{
+			return 1f;
+		}
+
+		return settings.LookSensitivity;
+	}
+
+	private static float DirectionToYaw(Vector3 direction)
+	{
+		if (direction.sqrMagnitude <= 0.0001f)
+		{
+			return 0f;
+		}
+
+		return Mathf.Atan2(direction.x, direction.z) * 57.29578f;
+	}
+
+	private static float DirectionToPitch(Vector3 direction)
+	{
+		if (direction.sqrMagnitude <= 0.0001f)
+		{
+			return 0f;
+		}
+
+		return Mathf.Asin(Mathf.Clamp(direction.y, -1f, 1f)) * 57.29578f;
+	}
+
+	private static Vector3 ResolveCameraCollision(Vector3 origin, Vector3 desiredPosition)
+	{
+		Vector3 delta = desiredPosition - origin;
+		float distance = delta.magnitude;
+		if (distance <= CameraMinDistance)
+		{
+			Vector3 fallbackDir = NormalizeOrZero(delta);
+			if (fallbackDir.sqrMagnitude <= 0.0001f)
+			{
+				fallbackDir = Vector3.back;
+			}
+			return origin + fallbackDir * CameraMinDistance;
+		}
+
+		Vector3 direction = delta / distance;
+		if (Physics.SphereCast(origin, CameraCollisionRadius, direction, out RaycastHit hit, distance, GetCameraCollisionMask(), QueryTriggerInteraction.Ignore))
+		{
+			float safeDistance = Mathf.Max(CameraMinDistance, hit.distance - CameraCollisionPadding);
+			return origin + direction * safeDistance;
+		}
+
+		return desiredPosition;
+	}
+
+	private static int GetCameraCollisionMask()
+	{
+		if (cameraCollisionMask != -1)
+		{
+			return cameraCollisionMask;
+		}
+
+		int mask = 0;
+		int defaultLayer = LayerMask.NameToLayer("Default");
+		int terrainLayer = LayerMask.NameToLayer("Terrain");
+		if (defaultLayer >= 0)
+		{
+			mask |= 1 << defaultLayer;
+		}
+		if (terrainLayer >= 0)
+		{
+			mask |= 1 << terrainLayer;
+		}
+		if (mask == 0)
+		{
+			mask = Physics.DefaultRaycastLayers;
+		}
+
+		cameraCollisionMask = mask;
+		return cameraCollisionMask;
 	}
 
 	private static Vector3 Flatten(Vector3 vector)

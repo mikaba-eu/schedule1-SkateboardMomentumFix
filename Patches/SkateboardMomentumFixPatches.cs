@@ -51,14 +51,38 @@ internal static class PlayerMovement_SetResidualVelocity_Patch
 [HarmonyPatch(typeof(SkateboardCamera), "OnPlayerMountedSkateboard")]
 internal static class SkateboardCamera_OnPlayerMountedSkateboard_Patch
 {
+	private static bool Prefix(SkateboardCamera __instance, Skateboard skateboard)
+	{
+		bool handled = SkateboardMomentumFixService.BeginCustomSkateboardCamera(__instance, skateboard);
+		return !handled;
+	}
+}
+
+[HarmonyPatch(typeof(SkateboardCamera), "Update")]
+internal static class SkateboardCamera_Update_Patch
+{
+	private static bool Prefix(SkateboardCamera __instance)
+	{
+		return !SkateboardMomentumFixService.HasCustomSkateboardCamera(__instance);
+	}
+}
+
+[HarmonyPatch(typeof(SkateboardCamera), "LateUpdate")]
+internal static class SkateboardCamera_LateUpdate_Patch
+{
+	private static bool Prefix(SkateboardCamera __instance)
+	{
+		bool handled = SkateboardMomentumFixService.RunCustomSkateboardCamera(__instance);
+		return !handled;
+	}
+}
+
+[HarmonyPatch(typeof(SkateboardCamera), "OnDestroy")]
+internal static class SkateboardCamera_OnDestroy_Patch
+{
 	private static void Prefix(SkateboardCamera __instance)
 	{
-		SkateboardMomentumFixService.CaptureMountCameraPose(__instance);
-	}
-
-	private static void Postfix(SkateboardCamera __instance)
-	{
-		SkateboardMomentumFixService.BlendMountCamera(__instance);
+		SkateboardMomentumFixService.NotifySkateboardCameraDestroyed(__instance);
 	}
 }
 
