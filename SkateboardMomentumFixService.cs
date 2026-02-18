@@ -38,6 +38,8 @@ internal static class SkateboardMomentumFixService
 			CurrentRotation = playerCamera.transform.rotation;
 			MountStartPosition = CurrentPosition;
 			MountStartRotation = CurrentRotation;
+			MountTargetPosition = CurrentPosition;
+			MountTargetRotation = CurrentRotation;
 			MountBlend = 0f;
 			ManualWeight = NeedsSecondaryClick() ? 0f : 1f;
 			ManualWeightVelocity = 0f;
@@ -63,6 +65,10 @@ internal static class SkateboardMomentumFixService
 		internal Vector3 MountStartPosition;
 
 		internal Quaternion MountStartRotation;
+
+		internal Vector3 MountTargetPosition;
+
+		internal Quaternion MountTargetRotation;
 
 		internal float MountBlend;
 
@@ -118,11 +124,11 @@ internal static class SkateboardMomentumFixService
 	private const float MountTransferMultiplier = 1.15f;
 	private const float MaxMountDirectionAngle = 55f;
 	private const float TransitionWindow = 0.45f;
-	private const float CameraMountBlendDuration = 2f;
+	private const float CameraMountBlendDuration = 1.1f;
 	private const float CameraMountHideBodyDuration = 0.28f;
 	private const float CameraPositionSharpness = 11.5f;
 	private const float CameraRotationSharpness = 14.5f;
-	private const float CameraDistanceSmoothTime = 2.6f;
+	private const float CameraDistanceSmoothTime = 0.7f;
 	private const float CameraAutoYawSmoothTime = 0.2f;
 	private const float CameraAutoPitchSmoothTime = 0.24f;
 	private const float CameraForwardSharpness = 11f;
@@ -346,8 +352,19 @@ internal static class SkateboardMomentumFixService
 
 		Vector3 autoOffset = ComputeAutoOffset(skateboardCamera, activeCameraState.SmoothedForward);
 		activeCameraState.Distance = Mathf.Max(autoOffset.magnitude, CameraMinDistance);
-		activeCameraState.DistanceCurrent = 0.02f;
+		activeCameraState.DistanceCurrent = activeCameraState.Distance;
 		activeCameraState.DistanceVelocity = 0f;
+		Vector3 mountOrigin = originTransform.position;
+		Vector3 mountAnchor = skateboardCamera.transform != null ? skateboardCamera.transform.position : skateboard.transform.position;
+		activeCameraState.MountTargetPosition = ResolveCameraCollision(mountOrigin, mountAnchor + autoOffset);
+		if ((mountOrigin - activeCameraState.MountTargetPosition).sqrMagnitude <= 0.0001f)
+		{
+			activeCameraState.MountTargetRotation = activeCameraState.MountStartRotation;
+		}
+		else
+		{
+			activeCameraState.MountTargetRotation = Quaternion.LookRotation(mountOrigin - activeCameraState.MountTargetPosition, Vector3.up);
+		}
 		Vector3 euler = playerCamera.transform.rotation.eulerAngles;
 		float pitch = euler.x;
 		if (pitch > 180f)
@@ -398,38 +415,40 @@ internal static class SkateboardMomentumFixService
 
 		float dt = Mathf.Max(Time.deltaTime, 0.0001f);
 		Vector3 origin = originTransform.position;
-		Vector3 boardForward = NormalizeOrZero(Flatten(activeCameraState.Board.transform.forward));
-		if (boardForward.sqrMagnitude <= 0.0001f)
-		{
-			boardForward = activeCameraState.SmoothedForward;
-		}
-		if (boardForward.sqrMagnitude <= 0.0001f)
-		{
-			boardForward = Vector3.forward;
-		}
-		float forwardT = 1f - Mathf.Exp(0f - CameraForwardSharpness * dt);
-		activeCameraState.SmoothedForward = NormalizeOrZero(Vector3.Slerp(activeCameraState.SmoothedForward, boardForward, forwardT));
-		if (activeCameraState.SmoothedForward.sqrMagnitude <= 0.0001f)
-		{
-			activeCameraState.SmoothedForward = boardForward;
-		}
-		Vector3 autoOffset = ComputeAutoOffset(skateboardCamera, activeCameraState.SmoothedForward);
-		activeCameraState.DistanceCurrent = Mathf.SmoothDamp(activeCameraState.DistanceCurrent, activeCameraState.Distance, ref activeCameraState.DistanceVelocity, CameraDistanceSmoothTime, Mathf.Infinity, dt);
-		float distanceScale = (activeCameraState.Distance > 0.001f) ? activeCameraState.DistanceCurrent / activeCameraState.Distance : 1f;
-		Vector3 cameraAnchor = skateboardCamera.transform != null ? skateboardCamera.transform.position : activeCameraState.Board.transform.position;
-		Vector3 autoPosition = cameraAnchor + autoOffset * distanceScale;
-		autoPosition = ResolveCameraCollision(origin, autoPosition);
 		Vector3 desiredPosition;
 		Quaternion desiredRotation;
 
 		if (activeCameraState.MountBlend < 1f)
 		{
 			activeCameraState.MountBlend = Mathf.MoveTowards(activeCameraState.MountBlend, 1f, dt / CameraMountBlendDuration);
-			desiredPosition = autoPosition;
-			desiredRotation = activeCameraState.MountStartRotation;
+			float mountT = activeCameraState.MountBlend * activeCameraState.MountBlend * (3f - 2f * activeCameraState.MountBlend);
+			desiredPosition = Vector3.Lerp(activeCameraState.MountStartPosition, activeCameraState.MountTargetPosition, mountT);
+			desiredRotation = Quaternion.Slerp(activeCameraState.MountStartRotation, activeCameraState.MountTargetRotation, mountT);
 		}
 		else
 		{
+			Vector3 boardForward = NormalizeOrZero(Flatten(activeCameraState.Board.transform.forward));
+			if (boardForward.sqrMagnitude <= 0.0001f)
+			{
+				boardForward = activeCameraState.SmoothedForward;
+			}
+			if (boardForward.sqrMagnitude <= 0.0001f)
+			{
+				boardForward = Vector3.forward;
+			}
+			float forwardT = 1f - Mathf.Exp(0f - CameraForwardSharpness * dt);
+			activeCameraState.SmoothedForward = NormalizeOrZero(Vector3.Slerp(activeCameraState.SmoothedForward, boardForward, forwardT));
+			if (activeCameraState.SmoothedForward.sqrMagnitude <= 0.0001f)
+			{
+				activeCameraState.SmoothedForward = boardForward;
+			}
+			Vector3 autoOffset = ComputeAutoOffset(skateboardCamera, activeCameraState.SmoothedForward);
+			activeCameraState.DistanceCurrent = Mathf.SmoothDamp(activeCameraState.DistanceCurrent, activeCameraState.Distance, ref activeCameraState.DistanceVelocity, CameraDistanceSmoothTime, Mathf.Infinity, dt);
+			float distanceScale = (activeCameraState.Distance > 0.001f) ? activeCameraState.DistanceCurrent / activeCameraState.Distance : 1f;
+			Vector3 cameraAnchor = skateboardCamera.transform != null ? skateboardCamera.transform.position : activeCameraState.Board.transform.position;
+			Vector3 autoPosition = cameraAnchor + autoOffset * distanceScale;
+			autoPosition = ResolveCameraCollision(origin, autoPosition);
+
 			Vector3 autoDirection = NormalizeOrZero(autoOffset);
 			if (autoDirection.sqrMagnitude <= 0.0001f)
 			{
@@ -487,16 +506,24 @@ internal static class SkateboardMomentumFixService
 
 		if (activeCameraState.LocalBodyHidden &&
 		    Time.timeSinceLevelLoad >= activeCameraState.HideBodyUntilTime &&
-		    (activeCameraState.MountBlend >= 0.35f || activeCameraState.DistanceCurrent >= activeCameraState.Distance * 0.3f))
+		    activeCameraState.MountBlend >= 0.18f)
 		{
 			SetLocalBodyVisibility(visible: true);
 			activeCameraState.LocalBodyHidden = false;
 		}
 
-		float posT = 1f - Mathf.Exp(0f - CameraPositionSharpness * dt);
-		float rotT = 1f - Mathf.Exp(0f - CameraRotationSharpness * dt);
-		activeCameraState.CurrentPosition = Vector3.Lerp(activeCameraState.CurrentPosition, desiredPosition, posT);
-		activeCameraState.CurrentRotation = Quaternion.Slerp(activeCameraState.CurrentRotation, desiredRotation, rotT);
+		if (activeCameraState.MountBlend < 1f)
+		{
+			activeCameraState.CurrentPosition = desiredPosition;
+			activeCameraState.CurrentRotation = desiredRotation;
+		}
+		else
+		{
+			float posT = 1f - Mathf.Exp(0f - CameraPositionSharpness * dt);
+			float rotT = 1f - Mathf.Exp(0f - CameraRotationSharpness * dt);
+			activeCameraState.CurrentPosition = Vector3.Lerp(activeCameraState.CurrentPosition, desiredPosition, posT);
+			activeCameraState.CurrentRotation = Quaternion.Slerp(activeCameraState.CurrentRotation, desiredRotation, rotT);
+		}
 		playerCamera.transform.position = activeCameraState.CurrentPosition;
 		playerCamera.transform.rotation = activeCameraState.CurrentRotation;
 
