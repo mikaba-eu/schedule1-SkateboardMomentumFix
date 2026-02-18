@@ -118,11 +118,11 @@ internal static class SkateboardMomentumFixService
 	private const float MountTransferMultiplier = 1.15f;
 	private const float MaxMountDirectionAngle = 55f;
 	private const float TransitionWindow = 0.45f;
-	private const float CameraMountBlendDuration = 0.28f;
-	private const float CameraMountHideBodyDuration = 0.22f;
-	private const float CameraPositionSharpness = 14f;
-	private const float CameraRotationSharpness = 18f;
-	private const float CameraDistanceSmoothTime = 0.34f;
+	private const float CameraMountBlendDuration = 0.42f;
+	private const float CameraMountHideBodyDuration = 0.36f;
+	private const float CameraPositionSharpness = 11.5f;
+	private const float CameraRotationSharpness = 14.5f;
+	private const float CameraDistanceSmoothTime = 0.52f;
 	private const float CameraAutoYawSmoothTime = 0.2f;
 	private const float CameraAutoPitchSmoothTime = 0.24f;
 	private const float CameraForwardSharpness = 11f;
@@ -480,7 +480,8 @@ internal static class SkateboardMomentumFixService
 		}
 
 		if (activeCameraState.LocalBodyHidden &&
-		    (Time.timeSinceLevelLoad >= activeCameraState.HideBodyUntilTime || activeCameraState.MountBlend >= 0.55f || activeCameraState.DistanceCurrent >= activeCameraState.Distance * 0.5f))
+		    Time.timeSinceLevelLoad >= activeCameraState.HideBodyUntilTime &&
+		    (activeCameraState.MountBlend >= 0.82f || activeCameraState.DistanceCurrent >= activeCameraState.Distance * 0.8f))
 		{
 			SetLocalBodyVisibility(visible: true);
 			activeCameraState.LocalBodyHidden = false;
