@@ -39,6 +39,15 @@ internal static class SkateboardEquippable_Dismount_Patch
 	}
 }
 
+[HarmonyPatch(typeof(Player), nameof(Player.MountSkateboard))]
+internal static class Player_MountSkateboard_Patch
+{
+	private static void Postfix()
+	{
+		SkateboardMomentumFixService.NotifyPlayerMountCompleted();
+	}
+}
+
 [HarmonyPatch(typeof(PlayerMovement), nameof(PlayerMovement.SetResidualVelocity))]
 internal static class PlayerMovement_SetResidualVelocity_Patch
 {

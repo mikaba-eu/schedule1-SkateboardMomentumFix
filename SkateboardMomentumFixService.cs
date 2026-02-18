@@ -118,11 +118,11 @@ internal static class SkateboardMomentumFixService
 	private const float MountTransferMultiplier = 1.15f;
 	private const float MaxMountDirectionAngle = 55f;
 	private const float TransitionWindow = 0.45f;
-	private const float CameraMountBlendDuration = 0.42f;
-	private const float CameraMountHideBodyDuration = 0.36f;
+	private const float CameraMountBlendDuration = 2f;
+	private const float CameraMountHideBodyDuration = 0.8f;
 	private const float CameraPositionSharpness = 11.5f;
 	private const float CameraRotationSharpness = 14.5f;
-	private const float CameraDistanceSmoothTime = 0.52f;
+	private const float CameraDistanceSmoothTime = 2.6f;
 	private const float CameraAutoYawSmoothTime = 0.2f;
 	private const float CameraAutoPitchSmoothTime = 0.24f;
 	private const float CameraForwardSharpness = 11f;
@@ -394,6 +394,10 @@ internal static class SkateboardMomentumFixService
 			ClearCustomCameraState(restoreVisibilityForMountState: true);
 			return false;
 		}
+		if (activeCameraState.LocalBodyHidden)
+		{
+			SetLocalBodyVisibility(visible: false);
+		}
 
 		float dt = Mathf.Max(Time.deltaTime, 0.0001f);
 		Vector3 origin = originTransform.position;
@@ -518,6 +522,16 @@ internal static class SkateboardMomentumFixService
 		}
 
 		ClearCustomCameraState(restoreVisibilityForMountState: true);
+	}
+
+	internal static void NotifyPlayerMountCompleted()
+	{
+		if (activeCameraState == null || !activeCameraState.LocalBodyHidden)
+		{
+			return;
+		}
+
+		SetLocalBodyVisibility(visible: false);
 	}
 
 	internal static void BeginDismount(Skateboard_Equippable equippable)
