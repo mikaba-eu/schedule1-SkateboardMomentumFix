@@ -38,18 +38,12 @@ internal static class SkateboardMomentumFixService
 			CurrentRotation = playerCamera.transform.rotation;
 			MountStartPosition = CurrentPosition;
 			MountStartRotation = CurrentRotation;
-			MountTargetPosition = CurrentPosition;
-			MountTargetRotation = CurrentRotation;
 			MountBlend = 0f;
-			ManualWeight = NeedsSecondaryClick() ? 0f : 1f;
+			ManualWeight = 0f;
 			ManualWeightVelocity = 0f;
 			TimeSinceManualInput = 100f;
-			Distance = 2.5f;
-			DistanceCurrent = 2.5f;
-			DistanceVelocity = 0f;
 			BaseFov = (playerCamera.Camera != null) ? playerCamera.Camera.fieldOfView : 80f;
 			CurrentFovMultiplier = 1f;
-			SmoothedForward = Vector3.forward;
 			LocalBodyHidden = false;
 			HideBodyUntilTime = 0f;
 		}
@@ -66,25 +60,11 @@ internal static class SkateboardMomentumFixService
 
 		internal Quaternion MountStartRotation;
 
-		internal Vector3 MountTargetPosition;
-
-		internal Quaternion MountTargetRotation;
-
 		internal float MountBlend;
-
-		internal float Distance;
-
-		internal float DistanceCurrent;
-
-		internal float DistanceVelocity;
 
 		internal float OrbitYaw;
 
 		internal float OrbitPitch;
-
-		internal float OrbitYawVelocity;
-
-		internal float OrbitPitchVelocity;
 
 		internal float ManualWeight;
 
@@ -95,8 +75,6 @@ internal static class SkateboardMomentumFixService
 		internal float BaseFov;
 
 		internal float CurrentFovMultiplier;
-
-		internal Vector3 SmoothedForward;
 
 		internal bool LocalBodyHidden;
 
@@ -128,10 +106,6 @@ internal static class SkateboardMomentumFixService
 	private const float CameraMountHideBodyDuration = 0.28f;
 	private const float CameraPositionSharpness = 11.5f;
 	private const float CameraRotationSharpness = 14.5f;
-	private const float CameraDistanceSmoothTime = 0.7f;
-	private const float CameraAutoYawSmoothTime = 0.2f;
-	private const float CameraAutoPitchSmoothTime = 0.24f;
-	private const float CameraForwardSharpness = 11f;
 	private const float CameraManualReleaseDelay = 0.05f;
 	private const float CameraManualEngageSmoothTime = 0.08f;
 	private const float CameraManualReturnSmoothTime = 0.48f;
@@ -343,28 +317,6 @@ internal static class SkateboardMomentumFixService
 		}
 
 		activeCameraState = new CustomCameraState(skateboardCamera, skateboard, playerCamera);
-		Vector3 boardForward = NormalizeOrZero(Flatten(skateboard.transform.forward));
-		if (boardForward.sqrMagnitude <= 0.0001f)
-		{
-			boardForward = Vector3.forward;
-		}
-		activeCameraState.SmoothedForward = boardForward;
-
-		Vector3 autoOffset = ComputeAutoOffset(skateboardCamera, activeCameraState.SmoothedForward);
-		activeCameraState.Distance = Mathf.Max(autoOffset.magnitude, CameraMinDistance);
-		activeCameraState.DistanceCurrent = activeCameraState.Distance;
-		activeCameraState.DistanceVelocity = 0f;
-		Vector3 mountOrigin = originTransform.position;
-		Vector3 mountAnchor = skateboardCamera.transform != null ? skateboardCamera.transform.position : skateboard.transform.position;
-		activeCameraState.MountTargetPosition = ResolveCameraCollision(mountOrigin, mountAnchor + autoOffset);
-		if ((mountOrigin - activeCameraState.MountTargetPosition).sqrMagnitude <= 0.0001f)
-		{
-			activeCameraState.MountTargetRotation = activeCameraState.MountStartRotation;
-		}
-		else
-		{
-			activeCameraState.MountTargetRotation = Quaternion.LookRotation(mountOrigin - activeCameraState.MountTargetPosition, Vector3.up);
-		}
 		Vector3 euler = playerCamera.transform.rotation.eulerAngles;
 		float pitch = euler.x;
 		if (pitch > 180f)
@@ -373,8 +325,6 @@ internal static class SkateboardMomentumFixService
 		}
 		activeCameraState.OrbitYaw = euler.y;
 		activeCameraState.OrbitPitch = Mathf.Clamp(pitch, CameraPitchMin, CameraPitchMax);
-		activeCameraState.OrbitYawVelocity = 0f;
-		activeCameraState.OrbitPitchVelocity = 0f;
 		HideLocalBodyDuringMountPullout(activeCameraState);
 		return true;
 	}
@@ -415,93 +365,85 @@ internal static class SkateboardMomentumFixService
 
 		float dt = Mathf.Max(Time.deltaTime, 0.0001f);
 		Vector3 origin = originTransform.position;
+		Vector3 boardForward = NormalizeOrZero(Flatten(activeCameraState.Board.transform.forward));
+		if (boardForward.sqrMagnitude <= 0.0001f && skateboardCamera.transform != null)
+		{
+			boardForward = NormalizeOrZero(Flatten(skateboardCamera.transform.forward));
+		}
+		if (boardForward.sqrMagnitude <= 0.0001f)
+		{
+			boardForward = Vector3.forward;
+		}
+
+		Vector3 autoOffset = ComputeAutoOffset(skateboardCamera, boardForward);
+		float orbitDistance = Mathf.Max(autoOffset.magnitude, CameraMinDistance);
+		Vector3 cameraAnchor = skateboardCamera.transform != null ? skateboardCamera.transform.position : activeCameraState.Board.transform.position;
+		Vector3 autoPosition = ResolveCameraCollision(origin, cameraAnchor + autoOffset);
+
+		Vector2 mouseDelta = GameInput.MouseDelta;
+		bool requiresSecondary = NeedsSecondaryClick();
+		bool secondaryHeld = GameInput.GetButton(GameInput.ButtonCode.SecondaryClick);
+		bool hasMouseInput = mouseDelta.sqrMagnitude > 0.000001f;
+		bool manualControlActive = requiresSecondary ? secondaryHeld : hasMouseInput;
+		bool manualLookInput = manualControlActive && hasMouseInput;
+		float lookSensitivity = GetLookSensitivity();
+
+		if (manualControlActive)
+		{
+			if (manualLookInput)
+			{
+				activeCameraState.OrbitYaw += mouseDelta.x * CameraMouseYawScale * lookSensitivity;
+				activeCameraState.OrbitPitch = Mathf.Clamp(activeCameraState.OrbitPitch - mouseDelta.y * CameraMousePitchScale * lookSensitivity, CameraPitchMin, CameraPitchMax);
+			}
+
+			activeCameraState.TimeSinceManualInput = 0f;
+			activeCameraState.ManualWeight = Mathf.SmoothDamp(activeCameraState.ManualWeight, 1f, ref activeCameraState.ManualWeightVelocity, CameraManualEngageSmoothTime, Mathf.Infinity, dt);
+		}
+		else
+		{
+			activeCameraState.TimeSinceManualInput += dt;
+			if (activeCameraState.TimeSinceManualInput > CameraManualReleaseDelay)
+			{
+				activeCameraState.ManualWeight = Mathf.SmoothDamp(activeCameraState.ManualWeight, 0f, ref activeCameraState.ManualWeightVelocity, CameraManualReturnSmoothTime, Mathf.Infinity, dt);
+			}
+		}
+
+		if (GameInput.GetButtonDown(GameInput.ButtonCode.VehicleResetCamera))
+		{
+			activeCameraState.ManualWeight = 0f;
+			activeCameraState.ManualWeightVelocity = 0f;
+			activeCameraState.TimeSinceManualInput = 100f;
+			Vector3 autoLook = NormalizeOrZero(origin - autoPosition);
+			if (autoLook.sqrMagnitude > 0.0001f)
+			{
+				activeCameraState.OrbitYaw = DirectionToYaw(autoLook);
+				activeCameraState.OrbitPitch = Mathf.Clamp(DirectionToPitch(autoLook), CameraPitchMin, CameraPitchMax);
+			}
+		}
+
+		Quaternion orbitRotation = Quaternion.Euler(activeCameraState.OrbitPitch, activeCameraState.OrbitYaw, 0f);
+		Vector3 manualPosition = origin + orbitRotation * Vector3.back * orbitDistance;
+		manualPosition = ResolveCameraCollision(origin, manualPosition);
+		Vector3 followPosition = Vector3.Lerp(autoPosition, manualPosition, activeCameraState.ManualWeight);
+		followPosition = ResolveCameraCollision(origin, followPosition);
+		Vector3 followDirection = origin - followPosition;
+		Quaternion followRotation = followDirection.sqrMagnitude > 0.0001f
+			? Quaternion.LookRotation(followDirection, Vector3.up)
+			: activeCameraState.CurrentRotation;
+
 		Vector3 desiredPosition;
 		Quaternion desiredRotation;
-
 		if (activeCameraState.MountBlend < 1f)
 		{
 			activeCameraState.MountBlend = Mathf.MoveTowards(activeCameraState.MountBlend, 1f, dt / CameraMountBlendDuration);
 			float mountT = activeCameraState.MountBlend * activeCameraState.MountBlend * (3f - 2f * activeCameraState.MountBlend);
-			desiredPosition = Vector3.Lerp(activeCameraState.MountStartPosition, activeCameraState.MountTargetPosition, mountT);
-			desiredRotation = Quaternion.Slerp(activeCameraState.MountStartRotation, activeCameraState.MountTargetRotation, mountT);
+			desiredPosition = Vector3.Lerp(activeCameraState.MountStartPosition, followPosition, mountT);
+			desiredRotation = Quaternion.Slerp(activeCameraState.MountStartRotation, followRotation, mountT);
 		}
 		else
 		{
-			Vector3 boardForward = NormalizeOrZero(Flatten(activeCameraState.Board.transform.forward));
-			if (boardForward.sqrMagnitude <= 0.0001f)
-			{
-				boardForward = activeCameraState.SmoothedForward;
-			}
-			if (boardForward.sqrMagnitude <= 0.0001f)
-			{
-				boardForward = Vector3.forward;
-			}
-			float forwardT = 1f - Mathf.Exp(0f - CameraForwardSharpness * dt);
-			activeCameraState.SmoothedForward = NormalizeOrZero(Vector3.Slerp(activeCameraState.SmoothedForward, boardForward, forwardT));
-			if (activeCameraState.SmoothedForward.sqrMagnitude <= 0.0001f)
-			{
-				activeCameraState.SmoothedForward = boardForward;
-			}
-			Vector3 autoOffset = ComputeAutoOffset(skateboardCamera, activeCameraState.SmoothedForward);
-			activeCameraState.DistanceCurrent = Mathf.SmoothDamp(activeCameraState.DistanceCurrent, activeCameraState.Distance, ref activeCameraState.DistanceVelocity, CameraDistanceSmoothTime, Mathf.Infinity, dt);
-			float distanceScale = (activeCameraState.Distance > 0.001f) ? activeCameraState.DistanceCurrent / activeCameraState.Distance : 1f;
-			Vector3 cameraAnchor = skateboardCamera.transform != null ? skateboardCamera.transform.position : activeCameraState.Board.transform.position;
-			Vector3 autoPosition = cameraAnchor + autoOffset * distanceScale;
-			autoPosition = ResolveCameraCollision(origin, autoPosition);
-
-			Vector3 autoDirection = NormalizeOrZero(autoOffset);
-			if (autoDirection.sqrMagnitude <= 0.0001f)
-			{
-				autoDirection = Vector3.back;
-			}
-			float autoYaw = DirectionToYaw(autoDirection);
-			float autoPitch = Mathf.Clamp(DirectionToPitch(autoDirection), CameraPitchMin, CameraPitchMax);
-
-			Vector2 mouseDelta = GameInput.MouseDelta;
-			bool requiresSecondary = NeedsSecondaryClick();
-			bool secondaryHeld = GameInput.GetButton(GameInput.ButtonCode.SecondaryClick);
-			bool hasMouseInput = mouseDelta.sqrMagnitude > 0.000001f;
-			bool manualControlActive = requiresSecondary ? secondaryHeld : hasMouseInput;
-			bool manualLookInput = manualControlActive && hasMouseInput;
-			float lookSensitivity = GetLookSensitivity();
-
-			if (manualControlActive)
-			{
-				if (manualLookInput)
-				{
-					activeCameraState.OrbitYaw += mouseDelta.x * CameraMouseYawScale * lookSensitivity;
-					activeCameraState.OrbitPitch = Mathf.Clamp(activeCameraState.OrbitPitch - mouseDelta.y * CameraMousePitchScale * lookSensitivity, CameraPitchMin, CameraPitchMax);
-				}
-				activeCameraState.TimeSinceManualInput = 0f;
-				activeCameraState.ManualWeight = Mathf.SmoothDamp(activeCameraState.ManualWeight, 1f, ref activeCameraState.ManualWeightVelocity, CameraManualEngageSmoothTime, Mathf.Infinity, dt);
-			}
-			else
-			{
-				activeCameraState.TimeSinceManualInput += dt;
-				if (activeCameraState.TimeSinceManualInput > CameraManualReleaseDelay)
-				{
-					activeCameraState.ManualWeight = Mathf.SmoothDamp(activeCameraState.ManualWeight, 0f, ref activeCameraState.ManualWeightVelocity, CameraManualReturnSmoothTime, Mathf.Infinity, dt);
-				}
-				activeCameraState.OrbitYaw = Mathf.SmoothDampAngle(activeCameraState.OrbitYaw, autoYaw, ref activeCameraState.OrbitYawVelocity, CameraAutoYawSmoothTime, Mathf.Infinity, dt);
-				activeCameraState.OrbitPitch = Mathf.SmoothDamp(activeCameraState.OrbitPitch, autoPitch, ref activeCameraState.OrbitPitchVelocity, CameraAutoPitchSmoothTime, Mathf.Infinity, dt);
-			}
-
-			if (GameInput.GetButtonDown(GameInput.ButtonCode.VehicleResetCamera))
-			{
-				activeCameraState.ManualWeight = 0f;
-				activeCameraState.ManualWeightVelocity = 0f;
-				activeCameraState.TimeSinceManualInput = 100f;
-				activeCameraState.OrbitYaw = autoYaw;
-				activeCameraState.OrbitPitch = autoPitch;
-				activeCameraState.OrbitYawVelocity = 0f;
-				activeCameraState.OrbitPitchVelocity = 0f;
-			}
-
-			Quaternion orbitRotation = Quaternion.Euler(activeCameraState.OrbitPitch, activeCameraState.OrbitYaw, 0f);
-			Vector3 manualPosition = origin + orbitRotation * Vector3.back * activeCameraState.DistanceCurrent;
-			desiredPosition = Vector3.Lerp(autoPosition, manualPosition, activeCameraState.ManualWeight);
-			desiredPosition = ResolveCameraCollision(origin, desiredPosition);
-			desiredRotation = Quaternion.LookRotation(origin - desiredPosition, Vector3.up);
+			desiredPosition = followPosition;
+			desiredRotation = followRotation;
 		}
 
 		if (activeCameraState.LocalBodyHidden &&
