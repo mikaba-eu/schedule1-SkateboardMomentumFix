@@ -36,7 +36,7 @@ internal static class SkateboardMomentumFixService
 			Board = board;
 			CurrentPosition = playerCamera.transform.position;
 			CurrentRotation = playerCamera.transform.rotation;
-			MountStartPosition = CurrentPosition;
+			MountStartOffset = Vector3.zero;
 			MountStartRotation = CurrentRotation;
 			MountBlend = 0f;
 			ManualWeight = 0f;
@@ -56,7 +56,7 @@ internal static class SkateboardMomentumFixService
 
 		internal Quaternion CurrentRotation;
 
-		internal Vector3 MountStartPosition;
+		internal Vector3 MountStartOffset;
 
 		internal Quaternion MountStartRotation;
 
@@ -326,6 +326,7 @@ internal static class SkateboardMomentumFixService
 		}
 		activeCameraState.OrbitYaw = euler.y;
 		activeCameraState.OrbitPitch = Mathf.Clamp(pitch, CameraPitchMin, CameraPitchMax);
+		activeCameraState.MountStartOffset = activeCameraState.CurrentPosition - originTransform.position;
 		HideLocalBodyDuringMountPullout(activeCameraState);
 		return true;
 	}
@@ -439,8 +440,13 @@ internal static class SkateboardMomentumFixService
 			activeCameraState.MountBlend = Mathf.MoveTowards(activeCameraState.MountBlend, 1f, dt / CameraMountBlendDuration);
 			float easedBlend = Mathf.Pow(activeCameraState.MountBlend, CameraMountEasePower);
 			float mountT = easedBlend * easedBlend * (3f - 2f * easedBlend);
-			desiredPosition = Vector3.Lerp(activeCameraState.MountStartPosition, followPosition, mountT);
-			desiredRotation = Quaternion.Slerp(activeCameraState.MountStartRotation, followRotation, mountT);
+			Vector3 mountStartPosition = origin + activeCameraState.MountStartOffset;
+			Vector3 mountStartDirection = origin - mountStartPosition;
+			Quaternion mountStartRotation = mountStartDirection.sqrMagnitude > 0.0001f
+				? Quaternion.LookRotation(mountStartDirection, Vector3.up)
+				: activeCameraState.MountStartRotation;
+			desiredPosition = Vector3.Lerp(mountStartPosition, followPosition, mountT);
+			desiredRotation = Quaternion.Slerp(mountStartRotation, followRotation, mountT);
 		}
 		else
 		{
