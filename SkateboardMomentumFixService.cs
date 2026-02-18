@@ -102,7 +102,8 @@ internal static class SkateboardMomentumFixService
 	private const float MountTransferMultiplier = 1.15f;
 	private const float MaxMountDirectionAngle = 55f;
 	private const float TransitionWindow = 0.45f;
-	private const float CameraMountBlendDuration = 1.1f;
+	private const float CameraMountBlendDuration = 1.55f;
+	private const float CameraMountEasePower = 1.4f;
 	private const float CameraMountHideBodyDuration = 0.1f;
 	private const float CameraPositionSharpness = 11.5f;
 	private const float CameraRotationSharpness = 14.5f;
@@ -436,7 +437,8 @@ internal static class SkateboardMomentumFixService
 		if (activeCameraState.MountBlend < 1f)
 		{
 			activeCameraState.MountBlend = Mathf.MoveTowards(activeCameraState.MountBlend, 1f, dt / CameraMountBlendDuration);
-			float mountT = activeCameraState.MountBlend * activeCameraState.MountBlend * (3f - 2f * activeCameraState.MountBlend);
+			float easedBlend = Mathf.Pow(activeCameraState.MountBlend, CameraMountEasePower);
+			float mountT = easedBlend * easedBlend * (3f - 2f * easedBlend);
 			desiredPosition = Vector3.Lerp(activeCameraState.MountStartPosition, followPosition, mountT);
 			desiredRotation = Quaternion.Slerp(activeCameraState.MountStartRotation, followRotation, mountT);
 		}
